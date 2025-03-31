@@ -59,22 +59,18 @@ def screenshot_center_quarter():
     screen_width, screen_height = pyautogui.size()
     quarter_w = screen_width // 4
     quarter_h = screen_height // 4
-    left = quarter_w
-    top = quarter_h
-    width = quarter_w * 2
-    height = quarter_h * 2
+    left = quarter_w + 200
+    top = quarter_h + 200
+    width = quarter_w * 2 - 200
+    height = quarter_h * 2 - 200
     logging.info(f"[INFO] Chụp vùng trung tâm: ({left}, {top}, {width}, {height})")
     screenshot = pyautogui.screenshot(region=(left, top, width, height))
     return screenshot, left, top
 
-def click_on_project_by_name(project_name: str, strict=False, try_times=3):
+def click_on_project_by_name(project_name: str, strict=False, try_times=5):
     logging.info(f"[INFO] Đang tìm project: {project_name}")
     global log_directory
     print(f"click_on_project_by_name log_directory = {log_directory}")
-    screenshot, offset_x, offset_y = screenshot_center_quarter()
-    img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
-    data = pytesseract.image_to_data(img, lang='eng', output_type=pytesseract.Output.DICT)
-    logging.info(data['text'])
 
     best_match = None
     highest_ratio = 0
@@ -83,7 +79,11 @@ def click_on_project_by_name(project_name: str, strict=False, try_times=3):
 
     refer_ratio = 1.0
     for attempt in range(try_times):
-        logging.info(f"click_on_project_by_name {project_name} with ration = {int(refer_ratio*100)} %")
+        logging.info(f"click_on_project_by_name {project_name} with ratio = {int(refer_ratio*100)} %")
+        screenshot, offset_x, offset_y = screenshot_center_quarter()
+        img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+        data = pytesseract.image_to_data(img, lang='eng', output_type=pytesseract.Output.DICT)
+        logging.info(data['text'])
         for i, text in enumerate(data['text']):
             if not text.strip():
                 continue
@@ -103,19 +103,22 @@ def click_on_project_by_name(project_name: str, strict=False, try_times=3):
                 h = data['height'][i]
                 rect_start = (data['left'][i], data['top'][i])  # Tọa độ góc trên bên trái
                 rect_end = (data['left'][i] + w, data['top'][i] + h)  # Tọa độ góc dưới bên phải
-                best_match = (x + w // 2, y - h, ratio)
+                best_match = (x + 50, y - 50, ratio)
 
+        ratio = 0.0
+        x = 0
+        y = 0
         if best_match:
             screenshot = Image.frombytes('RGB', screenshot.size, screenshot.tobytes())
             draw = ImageDraw.Draw(screenshot)
             draw.rectangle([rect_start, rect_end], outline="red", width=5)
+            x, y, ratio = best_match
 
         filename = f"{int(time.time())}_Find_{project_name}_{attempt}.png"
         screenshot_path = os.path.join(log_directory, filename)
         screenshot.save(screenshot_path)
         logging.info(f"[DEBUG] Ảnh OCR đã lưu tại: {screenshot_path}")
 
-        x, y, ratio = best_match
         if ratio >= refer_ratio:
             logging.info(f"[INFO] Tìm thấy kết quả tốt nhất '{project_name}' với ratio {ratio} tại ({x},{y})")
             # highlight_area((x, y), size=60)
@@ -319,29 +322,29 @@ def start_auto(projects, IMG_DIR):
     log_directory = setup_logging()
     logging.info(f"start_auto log_directory = {log_directory}")
     logging.info(f"Thư mục chứa ảnh mẫu : {IMG_DIR}") 
-    try:
-        for project in projects:
-            if click_on_project_by_name(project) :
-                time.sleep(10)
-                wait_status, count = wait_for_project_to_load(IMG_DIR)
-                if not wait_status:
-                    logging.info(f"[ERROR] Không thể load project sau khi chờ đợi {count * 2} giây ")
-                    close_project(IMG_DIR)
-                    time.sleep(10)
-                    continue 
-                print(f"load project count  = {count}")
-                time.sleep(10*count)
-                if export_video(IMG_DIR):
-                    if wait_render_done(IMG_DIR):
-                        close_project(IMG_DIR)
-                    
-                    else:
-                        logging.info("[ERROR] Không thể export.")
-            else:
-                
-                logging.info("[ERROR] Không thể tìm thấy project")
+    # try:
+    for project in projects:
+        if click_on_project_by_name(project) :
             time.sleep(10)
-    except Exception as e:
-        logging.error(f"[ERROR] Lỗi gì đó chưa xử lý được... {e}") 
+            wait_status, count = wait_for_project_to_load(IMG_DIR)
+            if not wait_status:
+                logging.info(f"[ERROR] Không thể load project sau khi chờ đợi {count * 2} giây ")
+                close_project(IMG_DIR)
+                time.sleep(10)
+                continue 
+            print(f"load project count  = {count}")
+            time.sleep(10*count)
+            if export_video(IMG_DIR):
+                if wait_render_done(IMG_DIR):
+                    close_project(IMG_DIR)
+                
+                else:
+                    logging.info("[ERROR] Không thể export.")
+        else:
+            
+            logging.info("[ERROR] Không thể tìm thấy project")
+        time.sleep(10)
+    # except Exception as e:
+    #     logging.error(f"[ERROR] Lỗi gì đó chưa xử lý được... {e}") 
     os.startfile(f"{log_directory}/log.txt")
     os.startfile(log_directory)
