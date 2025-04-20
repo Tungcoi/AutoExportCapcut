@@ -8,8 +8,15 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 
 
+import shutil
+import time
+import uuid
+
+
+
 from auto_thread import initiate_auto_thread
 from auto import is_similar
+import winreg
 
 def read_project_path():
     """ Đọc đường dẫn đến thư mục dự án từ file config, sử dụng đường dẫn động. """
@@ -25,7 +32,8 @@ def read_project_path():
     except FileNotFoundError:
         print("File config không tồn tại.")
 
-    return None
+
+    return read_project_path_from_registry()
 
 def read_language():
     language_path = os.path.join(
@@ -41,6 +49,54 @@ def read_language():
         print("File config không tồn tại.")
     return None
 
+
+
+def read_export_path_from_registry():
+    try:
+        key_path = r"SOFTWARE\Bytedance\CapCut\Modules\Export"
+        registry_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ)
+        export_path, reg_type = winreg.QueryValueEx(registry_key, "ExportPath")
+        winreg.CloseKey(registry_key)
+        return export_path
+    except FileNotFoundError:
+        print("Không tìm thấy key hoặc giá trị ExportPath trong Registry.")
+        return None
+    except Exception as e:
+        print(f"Lỗi khi đọc ExportPath: {e}")
+        return None
+
+def read_project_path_from_registry():
+    try:
+        key_path = r"SOFTWARE\Bytedance\CapCut\GlobalSettings\History"
+        registry_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ)
+        project_path, reg_type = winreg.QueryValueEx(registry_key, "currentCustomDraftPath")
+        winreg.CloseKey(registry_key)
+        return project_path
+    except FileNotFoundError:
+        print("Không tìm thấy key hoặc giá trị currentCustomDraftPath trong Registry.")
+        return None
+    except Exception as e:
+        print(f"Lỗi khi đọc currentCustomDraftPath: {e}")
+        return None
+
+def get_capcut_executable_path():
+    try:
+        key_path = r"SOFTWARE\Bytedance\CapCut"
+        registry_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ)
+        install_dir, _ = winreg.QueryValueEx(registry_key, "installDir")
+        winreg.CloseKey(registry_key)
+
+        exe_path = os.path.join(install_dir, "CapCut.exe")
+        if os.path.exists(exe_path):
+            return exe_path
+        else:
+            print(f"CapCut.exe không tồn tại trong {exe_path}")
+            return None
+    except Exception as e:
+        print(f"Lỗi khi đọc CapCut từ registry: {e}")
+        return None
+
+
 class ProjectSelector(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -50,6 +106,10 @@ class ProjectSelector(QMainWindow):
         self.language = int(read_language())
         if self.language is None:
             self.handle_missing_language()
+        self.export_path = read_export_path_from_registry()
+        if self.export_path is None:
+            self.handle_missing_export_path()
+
         print(f"project_path = {self.project_path}")
         print(f"language = {self.language}")
         self.IMG_DIR = "images/vi"
@@ -60,6 +120,22 @@ class ProjectSelector(QMainWindow):
         self.initUI()
 
     
+    def handle_missing_export_path(self):
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Warning)
+        msg.setText("Không thể tự động tìm đường dẫn đến thư mục xuất video.")
+        msg.setInformativeText("Hãy chọn thư mục xuất video.")
+        msg.setWindowTitle("Lỗi Đường Dẫn")
+        msg.setStandardButtons(QMessageBox.Ok)
+        msg.exec()
+
+        # Mở dialog để chọn folder
+        folder = QFileDialog.getExistingDirectory(self, "Hãy chọn thư mục xuất video.")
+        if folder:
+            self.export_path = folder
+        else:
+            sys.exit(0)  # Thoát chương trình nếu không chọn folder
+
     def handle_missing_language(self):
         msg = QMessageBox()
         msg.setIcon(QMessageBox.Question)
@@ -179,84 +255,105 @@ class ProjectSelector(QMainWindow):
             row = self.selectedProjectList.row(selected_item)
             self.selectedProjectList.takeItem(row)
 
+   
     def displaySelectedProjects(self):
         selected_projects = [self.selectedProjectList.item(i).text() for i in range(self.selectedProjectList.count())]
-        
-        print("Các dự án đã chọn để xử lý:", selected_projects)
-        selected_projects.reverse()
-        print("Các dự án đã chọn để xử lý:", selected_projects)
-        if any(" " in project for project in selected_projects):
-            is_remove = self.remove_space()
-            if is_remove:
-                print("Ok remove space in project name...")
-                return  # Hủy thực thi nếu người dùng không muốn tiếp tục
-            else:
-                print("Continue without remove space in project name...")
-        all_projects = selected_projects + [item[0] for item in self.projects]
-        print(all_projects)
-        if not self.ignore_project_similarity(selected_projects=selected_projects, all_projects=all_projects):
-            print("Ok edit project...")
+
+        if not selected_projects:
+            QMessageBox.warning(self, "Không có dự án", "Vui lòng chọn ít nhất một dự án để tiếp tục.")
             return
-        print(
-            "Continue without edit project...")
 
-        if selected_projects and len(selected_projects) > 0:
-            self.showMinimized()
-            initiate_auto_thread(selected_projects, self.IMG_DIR)
+
+        capcut_exe = get_capcut_executable_path()
+        if not os.path.exists(capcut_exe):
+            QMessageBox.warning(self, "Không tìm thấy CapCut", "Không tìm thấy file thực thi CapCut.")
+            return
+
+        existing_names = [item[0] for item in self.projects]
+        self.showMinimized()
+        initiate_auto_thread(selected_projects, existing_names, self.project_path, self.IMG_DIR, capcut_exe, self.export_path)
+
+        time.sleep(5)  # chờ CapCut load xong
+      
+
+    # def displaySelectedProjects(self):
+    #     selected_projects = [self.selectedProjectList.item(i).text() for i in range(self.selectedProjectList.count())]
+        
+    #     print("Các dự án đã chọn để xử lý:", selected_projects)
+    #     selected_projects.reverse()
+    #     print("Các dự án đã chọn để xử lý:", selected_projects)
+    #     if any(" " in project for project in selected_projects):
+    #         is_remove = self.remove_space()
+    #         if is_remove:
+    #             print("Ok remove space in project name...")
+    #             return  # Hủy thực thi nếu người dùng không muốn tiếp tục
+    #         else:
+    #             print("Continue without remove space in project name...")
+    #     all_projects = selected_projects + [item[0] for item in self.projects]
+    #     print(all_projects)
+    #     if not self.ignore_project_similarity(selected_projects=selected_projects, all_projects=all_projects):
+    #         print("Ok edit project...")
+    #         return
+    #     print(
+    #         "Continue without edit project...")
+
+    #     if selected_projects and len(selected_projects) > 0:
+    #         self.showMinimized()
+    #         initiate_auto_thread(selected_projects, self.IMG_DIR)
 
         
-    def remove_space(self):
-        msg = QMessageBox()
-        msg.setIcon(QMessageBox.Warning)
-        msg.setWindowTitle("Cảnh Báo Tên Dự Án")
-        msg.setText("Tên dự án có chứa khoảng trắng có thể khiến Auto không nhận diện được đúng dự án. \n Hãy đổi tên dự án tránh nhầm lẫn!!!")
-        msg.setInformativeText("Tiếp tục mà không đổi tên chứ?")
-        btn_cancel = msg.addButton("Để tôi sửa", QMessageBox.ButtonRole.RejectRole)  # Đặt vai trò là RejectRole
-        btn_ok = msg.addButton("Tiếp tục, không cần sửa", QMessageBox.ButtonRole.AcceptRole)  # Đặt vai trò là AcceptRole
-        msg.setDefaultButton(btn_cancel)  # Đặt nút mặc định
+    # def remove_space(self):
+    #     msg = QMessageBox()
+    #     msg.setIcon(QMessageBox.Warning)
+    #     msg.setWindowTitle("Cảnh Báo Tên Dự Án")
+    #     msg.setText("Tên dự án có chứa khoảng trắng có thể khiến Auto không nhận diện được đúng dự án. \n Hãy đổi tên dự án tránh nhầm lẫn!!!")
+    #     msg.setInformativeText("Tiếp tục mà không đổi tên chứ?")
+    #     btn_cancel = msg.addButton("Để tôi sửa", QMessageBox.ButtonRole.RejectRole)  # Đặt vai trò là RejectRole
+    #     btn_ok = msg.addButton("Tiếp tục, không cần sửa", QMessageBox.ButtonRole.AcceptRole)  # Đặt vai trò là AcceptRole
+    #     msg.setDefaultButton(btn_cancel)  # Đặt nút mặc định
 
-        msg.exec()
-        # Kiểm tra kết quả để xem nút nào đã được nhấn
-        if msg.clickedButton() == btn_ok:
-            print("remove_space User chose to continue without renaming.")
-            return False
-        print("remove_space  chose to cancel.")
-        return True
+    #     msg.exec()
+    #     # Kiểm tra kết quả để xem nút nào đã được nhấn
+    #     if msg.clickedButton() == btn_ok:
+    #         print("remove_space User chose to continue without renaming.")
+    #         return False
+    #     print("remove_space  chose to cancel.")
+    #     return True
     
 
-    def ignore_project_similarity(self, selected_projects, all_projects):
-        similar_projects = set()
-        for i, proj1 in enumerate(selected_projects):
-            for proj2 in selected_projects[i+1:] + all_projects:
-                is_same, ratio = is_similar(proj1, proj2)
-                if is_same and ratio < 1.0:
-                    ordered_pair = tuple(sorted((proj1, proj2)))
-                    similar_projects.add(ordered_pair)
+    # def ignore_project_similarity(self, selected_projects, all_projects):
+    #     similar_projects = set()
+    #     for i, proj1 in enumerate(selected_projects):
+    #         for proj2 in selected_projects[i+1:] + all_projects:
+    #             is_same, ratio = is_similar(proj1, proj2)
+    #             if is_same and ratio < 1.0:
+    #                 ordered_pair = tuple(sorted((proj1, proj2)))
+    #                 similar_projects.add(ordered_pair)
             
-        if similar_projects:
-            return self.show_warning_similar(similar_projects)
-        return True
+    #     if similar_projects:
+    #         return self.show_warning_similar(similar_projects)
+    #     return True
 
-    def show_warning_similar(self, similar_pairs):
-        msg = QMessageBox()
-        msg.setIcon(QMessageBox.Warning)
-        msg.setWindowTitle("Cảnh báo tương đồng dự án")
-        message_text = "Các dự án sau đây khá giống nhau, auto có thể nhầm lẫn giữa chúng:\n\n"
-        message_text += "\n".join(f"{proj1} và {proj2}" for proj1, proj2 in similar_pairs)
-        msg.setText(message_text)
-        msg.setInformativeText("Bạn hãy đổi tên dự án để tránh nhầm lẫn")
-         # Thêm các nút tùy chỉnh với nhãn và vai trò
-        btn_cancel = msg.addButton("Để tôi sửa", QMessageBox.ButtonRole.RejectRole)
-        btn_continue = msg.addButton("Tiếp tục, không cần sửa", QMessageBox.ButtonRole.AcceptRole)
+    # def show_warning_similar(self, similar_pairs):
+    #     msg = QMessageBox()
+    #     msg.setIcon(QMessageBox.Warning)
+    #     msg.setWindowTitle("Cảnh báo tương đồng dự án")
+    #     message_text = "Các dự án sau đây khá giống nhau, auto có thể nhầm lẫn giữa chúng:\n\n"
+    #     message_text += "\n".join(f"{proj1} và {proj2}" for proj1, proj2 in similar_pairs)
+    #     msg.setText(message_text)
+    #     msg.setInformativeText("Bạn hãy đổi tên dự án để tránh nhầm lẫn")
+    #      # Thêm các nút tùy chỉnh với nhãn và vai trò
+    #     btn_cancel = msg.addButton("Để tôi sửa", QMessageBox.ButtonRole.RejectRole)
+    #     btn_continue = msg.addButton("Tiếp tục, không cần sửa", QMessageBox.ButtonRole.AcceptRole)
         
-        msg.setDefaultButton(btn_cancel)
-        msg.exec_()
-        # Kiểm tra kết quả để xem nút nào đã được nhấn
-        if msg.clickedButton() == btn_continue:
-            print("User chose to continue without renaming.")
-            return True
-        print("User chose to cancel.")
-        return False
+    #     msg.setDefaultButton(btn_cancel)
+    #     msg.exec_()
+    #     # Kiểm tra kết quả để xem nút nào đã được nhấn
+    #     if msg.clickedButton() == btn_continue:
+    #         print("User chose to continue without renaming.")
+    #         return True
+    #     print("User chose to cancel.")
+    #     return False
 
 def main():
     app = QApplication(sys.argv)

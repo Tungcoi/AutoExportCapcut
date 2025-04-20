@@ -9,6 +9,7 @@ import numpy as np
 from difflib import SequenceMatcher
 import logging
 from datetime import datetime
+import subprocess
 # Gắn thủ công đường dẫn tới file tesseract.exe
 # pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 pytesseract.pytesseract.tesseract_cmd = os.path.abspath("Tesseract-OCR/tesseract.exe")
@@ -59,10 +60,10 @@ def screenshot_center_quarter():
     screen_width, screen_height = pyautogui.size()
     quarter_w = screen_width // 4
     quarter_h = screen_height // 4
-    left = quarter_w + 200
-    top = quarter_h + 200
-    width = quarter_w * 2 - 200
-    height = quarter_h * 2 - 200
+    left = quarter_w
+    top = quarter_h
+    width = quarter_w * 2
+    height = quarter_h * 2
     logging.info(f"[INFO] Chụp vùng trung tâm: ({left}, {top}, {width}, {height})")
     screenshot = pyautogui.screenshot(region=(left, top, width, height))
     return screenshot, left, top
@@ -71,19 +72,19 @@ def click_on_project_by_name(project_name: str, strict=False, try_times=5):
     logging.info(f"[INFO] Đang tìm project: {project_name}")
     global log_directory
     print(f"click_on_project_by_name log_directory = {log_directory}")
-
-    best_match = None
-    highest_ratio = 0
-    rect_start = None
-    rect_end = None
-
+    
     refer_ratio = 1.0
     for attempt in range(try_times):
-        logging.info(f"click_on_project_by_name {project_name} with ratio = {int(refer_ratio*100)} %")
         screenshot, offset_x, offset_y = screenshot_center_quarter()
         img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
         data = pytesseract.image_to_data(img, lang='eng', output_type=pytesseract.Output.DICT)
         logging.info(data['text'])
+
+        best_match = None
+        highest_ratio = 0
+        rect_start = None
+        rect_end = None
+        logging.info(f"click_on_project_by_name {project_name} with ration = {int(refer_ratio*100)} %")
         for i, text in enumerate(data['text']):
             if not text.strip():
                 continue
@@ -103,29 +104,27 @@ def click_on_project_by_name(project_name: str, strict=False, try_times=5):
                 h = data['height'][i]
                 rect_start = (data['left'][i], data['top'][i])  # Tọa độ góc trên bên trái
                 rect_end = (data['left'][i] + w, data['top'][i] + h)  # Tọa độ góc dưới bên phải
-                best_match = (x + 50, y - 50, ratio)
+                best_match = (x + w // 2, y - h, ratio)
 
-        ratio = 0.0
-        x = 0
-        y = 0
         if best_match:
             screenshot = Image.frombytes('RGB', screenshot.size, screenshot.tobytes())
             draw = ImageDraw.Draw(screenshot)
             draw.rectangle([rect_start, rect_end], outline="red", width=5)
-            x, y, ratio = best_match
 
         filename = f"{int(time.time())}_Find_{project_name}_{attempt}.png"
         screenshot_path = os.path.join(log_directory, filename)
         screenshot.save(screenshot_path)
         logging.info(f"[DEBUG] Ảnh OCR đã lưu tại: {screenshot_path}")
 
-        if ratio >= refer_ratio:
-            logging.info(f"[INFO] Tìm thấy kết quả tốt nhất '{project_name}' với ratio {ratio} tại ({x},{y})")
-            # highlight_area((x, y), size=60)
-            pyautogui.moveTo(x, y, duration=0.3)
-            time.sleep(1)
-            pyautogui.click()
-            return True
+        if best_match:
+            x, y, ratio = best_match
+            if ratio >= refer_ratio:
+                logging.info(f"[INFO] Tìm thấy kết quả tốt nhất '{project_name}' với ratio {ratio} tại ({x},{y})")
+                # highlight_area((x, y), size=60)
+                pyautogui.moveTo(x, y, duration=0.3)
+                time.sleep(1)
+                pyautogui.click()
+                return True
         refer_ratio -= 0.1
   
     logging.info(f"[WARN] Không tìm thấy project tên gần giống: {project_name} sau {try_times} lần thử")
@@ -281,8 +280,11 @@ def wait_render_done(IMG_DIR):
         if found:
             logging.info("[INFO] Render xong!")
             locate_and_click(IMG_DIR, 'cancel_button.png', timeout=15)
+            logging.info("[INFO] Render xong! Đã đóng popup. Nghỉ 5 giây...")
+            time.sleep(5)
+            logging.info("[INFO] Render xong! Đã đóng popup. Nghỉ 5 giây xong...")
             return True
-        
+
         time.sleep(10)
 
 
@@ -294,6 +296,7 @@ def close_project(IMG_DIR):
     if locate_and_click(IMG_DIR, 'close_project.png', timeout=10, region_pos=RegionPosition.TOP_RIGHT):
         logging.info("[INFO] Đã đóng project.")
     else:
+        logging.info("[INFO] fallback alt + f4... Đã đóng project.")
         pyautogui.hotkey('alt', 'f4')  # fallback
 
 def wait_for_project_to_load(IMG_DIR):
@@ -316,35 +319,96 @@ def wait_for_project_to_load(IMG_DIR):
     logging.info("[ERROR] Timeout while waiting for project to load.")
     return False, count
 
-def start_auto(projects, IMG_DIR):
+def start_auto(projects, existing_names, project_path, IMG_DIR,capcut_exe, export_path):
     # Gọi hàm setup_logging ở đầu script hoặc trong hàm main/start_auto
     global log_directory
     log_directory = setup_logging()
     logging.info(f"start_auto log_directory = {log_directory}")
     logging.info(f"Thư mục chứa ảnh mẫu : {IMG_DIR}") 
-    # try:
     for project in projects:
-        if click_on_project_by_name(project) :
-            time.sleep(10)
-            wait_status, count = wait_for_project_to_load(IMG_DIR)
-            if not wait_status:
-                logging.info(f"[ERROR] Không thể load project sau khi chờ đợi {count * 2} giây ")
-                close_project(IMG_DIR)
-                time.sleep(10)
-                continue 
-            print(f"load project count  = {count}")
-            time.sleep(10*count)
-            if export_video(IMG_DIR):
-                if wait_render_done(IMG_DIR):
-                    close_project(IMG_DIR)
-                
+        rename = False
+        render_done = False
+        try:
+            original_path = os.path.join(project_path, project)
+            safe_name = generate_unique_name(existing_names)
+            new_path = os.path.join(project_path, safe_name)
+            time.sleep(3)
+            try:
+                os.rename(original_path, new_path)
+                rename = True
+                print(f"Đổi tên '{original_path}' thành '{new_path}'")
+            except Exception as e:
+                logging.critical(f"Không thể đổi tên dự án '{project}': {e}")
+            if rename:
+             # Kill CapCut nếu đang chạy
+                subprocess.run(["taskkill", "/f", "/im", "CapCut.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(3)
+                subprocess.Popen([capcut_exe])
+                time.sleep(5)  # chờ CapCut load xong
+
+                if click_on_project_by_name(safe_name) :
+                    time.sleep(10)
+                    wait_status, count = wait_for_project_to_load(IMG_DIR)
+                    if not wait_status:
+                        logging.info(f"[ERROR] Không thể load project sau khi chờ đợi {count * 2} giây ")
+                        close_project(IMG_DIR)
+                        time.sleep(10)
+                        continue 
+                    print(f"load project count  = {count}")
+                    time.sleep(10*count)
+                    start_time = time.time()
+                    if export_video(IMG_DIR):
+                        render_done = wait_render_done(IMG_DIR)
+                        close_project(IMG_DIR)
+                        logging.info(f"render_done = {render_done}")
+
+                    if render_done:
+                        for f in os.listdir(export_path):
+                            logging.info(f"[INFO] Tìm thấy file xuất: {f}")
+                            full_path = os.path.join(export_path, f)
+                            if safe_name.lower() in f.lower():
+                                if os.path.isfile(full_path) and os.path.getmtime(full_path) > start_time:
+                                    full_path = os.path.join(export_path, f)
+                                    ext = os.path.splitext(full_path)[1] 
+                                    org_path = os.path.join(export_path, f"{project}{ext}")
+                                    if os.path.exists(org_path):
+                                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                        org_path = os.path.join(export_path, f"{project}_{timestamp}{ext}")
+                                        for _ in range(3):
+                                            if os.path.exists(full_path):
+                                                try:
+                                                    os.rename(full_path, org_path)
+                                                    logging.info(f"[INFO] Đã đổi tên video {full_path} xuất thành: {org_path}")
+                                                    break
+                                                except Exception as e:
+                                                    logging.error(f"[ERROR] Không thể đổi tên video {full_path} xuất thành: {org_path} - {e}")
+                                                time.sleep(5)
+                                        break
                 else:
-                    logging.info("[ERROR] Không thể export.")
-        else:
-            
-            logging.info("[ERROR] Không thể tìm thấy project")
-        time.sleep(10)
-    # except Exception as e:
-    #     logging.error(f"[ERROR] Lỗi gì đó chưa xử lý được... {e}") 
+                    logging.info("[ERROR] Không thể tìm thấy project")
+                time.sleep(10)
+        except Exception as e:
+            logging.error(f"[ERROR] Lỗi gì đó chưa xử lý được... {e}") 
+        if rename:
+            try:
+                os.rename(new_path, original_path)
+                print(f"Đổi tên '{new_path}' thành '{original_path}'")
+            except Exception as e:
+                logging.critical(f"Không thể đổi tên dự án '{project}': {e}")
+
     os.startfile(f"{log_directory}/log.txt")
     os.startfile(log_directory)
+
+import difflib
+import random
+import string
+
+def generate_unique_name(existing_names):
+    while True:
+        new_name = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+        similarities = [
+            difflib.SequenceMatcher(None, new_name.lower(), existing.lower()).ratio()
+            for existing in existing_names
+        ]
+        if all(sim < 0.5 for sim in similarities):
+            return new_name
